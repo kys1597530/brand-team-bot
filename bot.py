@@ -340,26 +340,37 @@ async def brainstorm_command(
 
             agent = AGENTS[agent_id]
 
-            # Build context for this agent
+            # Build full context for this agent
             if round_num == 1 and agent_id == "strategist":
-                prompt = f"브레인스토밍 주제: {topic}\n\n이 주제에 대해 브랜드 전략 관점에서 시작해줘. 핵심 포지셔닝과 타겟을 제안해."
+                prompt = f"[브레인스토밍 주제]: {topic}\n\n이 주제에 대해 브랜드 전략 관점에서 시작해줘. 핵심 포지셔닝과 타겟을 제안해."
             else:
-                recent = conversation_log[-4:] if len(conversation_log) > 4 else conversation_log
-                context = "\n\n".join(
-                    [f"[{e['agent']}]: {e['content']}" for e in recent]
+                # Use up to last 12 messages for rich context
+                recent_count = min(len(conversation_log), 12)
+                recent = conversation_log[-recent_count:]
+                context = "\n\n---\n\n".join(
+                    [f"[{e['agent']}] (Round {e.get('round', '?')}):\n{e['content']}" for e in recent]
                 )
+
+                continuity_instruction = (
+                    f"⚠️ 중요: 이것은 진행 중인 브레인스토밍의 라운드 {round_num}입니다. "
+                    f"아래 팀원들의 기존 논의를 반드시 읽고, 그 내용을 기반으로 발전시켜야 합니다. "
+                    f"절대 새로운 주제를 시작하지 마세요. 기존 아이디어를 구체화하거나, 빠진 부분을 보완하거나, 개선점을 제안하세요."
+                )
+
                 if summary_so_far:
                     prompt = (
-                        f"브레인스토밍 주제: {topic}\n\n"
-                        f"이전 요약:\n{summary_so_far}\n\n"
-                        f"최근 대화:\n{context}\n\n"
-                        f"위 내용을 바탕으로 너의 전문 분야 관점에서 이어서 발전시켜줘. 새로운 아이디어나 개선점을 제안해."
+                        f"[브레인스토밍 주제]: {topic}\n\n"
+                        f"{continuity_instruction}\n\n"
+                        f"===== 이전 라운드 요약 =====\n{summary_so_far}\n\n"
+                        f"===== 요약 이후 최근 대화 =====\n{context}\n\n"
+                        f"위 논의를 바탕으로 너의 전문 분야({agent['name']}) 관점에서 기존 아이디어를 더 발전시켜줘."
                     )
                 else:
                     prompt = (
-                        f"브레인스토밍 주제: {topic}\n\n"
-                        f"팀 대화:\n{context}\n\n"
-                        f"위 내용을 바탕으로 너의 전문 분야 관점에서 이어서 발전시켜줘. 새로운 아이디어나 개선점을 제안해."
+                        f"[브레인스토밍 주제]: {topic}\n\n"
+                        f"{continuity_instruction}\n\n"
+                        f"===== 팀 대화 기록 =====\n{context}\n\n"
+                        f"위 논의를 바탕으로 너의 전문 분야({agent['name']}) 관점에서 기존 아이디어를 더 발전시켜줘."
                     )
 
             try:
@@ -372,7 +383,7 @@ async def brainstorm_command(
                     )
                     reply = response.content[0].text
 
-                conversation_log.append({"agent": agent["name"], "content": reply})
+                conversation_log.append({"agent": agent["name"], "content": reply, "round": round_num})
 
                 embed = discord.Embed(description=reply, color=agent["color"])
                 embed.set_author(name=agent["name"])
@@ -403,7 +414,7 @@ async def brainstorm_command(
                 summary_response = client.messages.create(
                     model="claude-sonnet-4-20250514",
                     max_tokens=1000,
-                    system="당신은 브레인스토밍 세션의 기록자입니다. 팀 대화를 핵심 결정사항, 아이디어, 다음 단계로 정리해주세요. 한국어로 작성하세요.",
+                    system="당신은 브레인스토밍 세션의 기록자입니다. 팀 대화를 다음 구조로 정리하세요:\n1. 확정된 결정사항 (브랜드명, 타겟, 포지셔닝 등)\n2. 제안된 카피/슬로건 후보\n3. 디자인 방향 (컬러, 폰트, 소재 등 구체적으로)\n4. 리뷰어 피드백 요점\n5. 아직 미결정 사항\n\n⚠️ 구체적인 이름, 수치, 컬러코드, 문구 등은 반드시 그대로 보존하세요. 다음 라운드가 이 요약을 기반으로 이어가야 합니다. 한국어로 작성하세요.",
                     messages=[
                         {
                             "role": "user",
