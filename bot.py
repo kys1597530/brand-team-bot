@@ -285,4 +285,209 @@ async def team_command(interaction):
     await interaction.response.send_message(embed=embed)
 
 
+# ─── Brainstorm Mode ─────────────────────────────────────────────────
+
+brainstorm_active = {}  # {channel_id: True}
+
+
+@tree.command(name="brainstorm", description="팀 자동 브레인스토밍 (30분)")
+@app_commands.describe(
+    topic="브레인스토밍 주제",
+    rounds="라운드 수 (기본 15, 최대 30)",
+)
+async def brainstorm_command(
+    interaction,
+    topic: str,
+    rounds: int = 15,
+):
+    rounds = min(rounds, 30)
+    channel = interaction.channel
+    channel_id = channel.id
+
+    if brainstorm_active.get(channel_id):
+        await interaction.response.send_message(
+            "이미 브레인스토밍 진행 중입니다! `/stop` 으로 중지하세요.",
+            ephemeral=True,
+        )
+        return
+
+    brainstorm_active[channel_id] = True
+    await interaction.response.send_message(
+        f"🧠 **브레인스토밍 시작!**\n"
+        f"주제: **{topic}**\n"
+        f"라운드: **{rounds}** (10라운드마다 요약)\n"
+        f"중지하려면 `/stop`"
+    )
+
+    agent_order = ["strategist", "copywriter", "director", "reviewer"]
+    conversation_log = []
+    summary_so_far = ""
+
+    for round_num in range(1, rounds + 1):
+        if not brainstorm_active.get(channel_id):
+            break
+
+        # Round header
+        header = discord.Embed(
+            description=f"**라운드 {round_num}/{rounds}**",
+            color=0x333333,
+        )
+        await channel.send(embed=header)
+
+        for agent_id in agent_order:
+            if not brainstorm_active.get(channel_id):
+                break
+
+            agent = AGENTS[agent_id]
+
+            # Build context for this agent
+            if round_num == 1 and agent_id == "strategist":
+                prompt = f"브레인스토밍 주제: {topic}\n\n이 주제에 대해 브랜드 전략 관점에서 시작해줘. 핵심 포지셔닝과 타겟을 제안해."
+            else:
+                recent = conversation_log[-4:] if len(conversation_log) > 4 else conversation_log
+                context = "\n\n".join(
+                    [f"[{e['agent']}]: {e['content']}" for e in recent]
+                )
+                if summary_so_far:
+                    prompt = (
+                        f"브레인스토밍 주제: {topic}\n\n"
+                        f"이전 요약:\n{summary_so_far}\n\n"
+                        f"최근 대화:\n{context}\n\n"
+                        f"위 내용을 바탕으로 너의 전문 분야 관점에서 이어서 발전시켜줘. 새로운 아이디어나 개선점을 제안해."
+                    )
+                else:
+                    prompt = (
+                        f"브레인스토밍 주제: {topic}\n\n"
+                        f"팀 대화:\n{context}\n\n"
+                        f"위 내용을 바탕으로 너의 전문 분야 관점에서 이어서 발전시켜줘. 새로운 아이디어나 개선점을 제안해."
+                    )
+
+            try:
+                async with channel.typing():
+                    response = client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=800,
+                        system=agent["system"],
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    reply = response.content[0].text
+
+                conversation_log.append({"agent": agent["name"], "content": reply})
+
+                embed = discord.Embed(description=reply, color=agent["color"])
+                embed.set_author(name=agent["name"])
+                embed.set_footer(text=f"Round {round_num}")
+                await channel.send(embed=embed)
+
+            except Exception as e:
+                embed = discord.Embed(
+                    description=f"Error: {str(e)[:200]}",
+                    color=0xFF0000,
+                )
+                embed.set_author(name=agent["name"])
+                await channel.send(embed=embed)
+
+        # Summary every 10 rounds
+        if round_num % 10 == 0 and brainstorm_active.get(channel_id):
+            summary_embed = discord.Embed(
+                description="📋 **중간 요약 생성 중...**",
+                color=0xFFFFFF,
+            )
+            await channel.send(embed=summary_embed)
+
+            all_content = "\n\n".join(
+                [f"[{e['agent']}]: {e['content']}" for e in conversation_log]
+            )
+
+            try:
+                summary_response = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=1000,
+                    system="당신은 브레인스토밍 세션의 기록자입니다. 팀 대화를 핵심 결정사항, 아이디어, 다음 단계로 정리해주세요. 한국어로 작성하세요.",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"다음 브레인스토밍 대화를 요약해주세요:\n\n{all_content}",
+                        }
+                    ],
+                )
+                summary_so_far = summary_response.content[0].text
+
+                # Reset log to save tokens
+                conversation_log = []
+
+                s_embed = discord.Embed(
+                    title=f"📋 {round_num}라운드 요약",
+                    description=summary_so_far,
+                    color=0xFFFFFF,
+                )
+                await channel.send(embed=s_embed)
+
+            except Exception as e:
+                await channel.send(
+                    embed=discord.Embed(
+                        description=f"요약 생성 실패: {str(e)[:200]}", color=0xFF0000
+                    )
+                )
+
+    # Final summary
+    if brainstorm_active.get(channel_id) and conversation_log:
+        all_content = "\n\n".join(
+            [f"[{e['agent']}]: {e['content']}" for e in conversation_log]
+        )
+        context_for_final = (
+            f"이전 요약:\n{summary_so_far}\n\n최근 대화:\n{all_content}"
+            if summary_so_far
+            else all_content
+        )
+
+        try:
+            final_response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1500,
+                system="당신은 브레인스토밍 세션의 기록자입니다. 전체 세션의 최종 결과를 정리해주세요: 1) 핵심 결정사항 2) 브랜드 전략 요약 3) 카피 후보 4) 디자인 방향 5) 다음 단계. 한국어로 작성하세요.",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"전체 브레인스토밍 최종 요약:\n\n{context_for_final}",
+                    }
+                ],
+            )
+
+            final_embed = discord.Embed(
+                title="✅ 브레인스토밍 완료! 최종 요약",
+                description=final_response.content[0].text,
+                color=0x00FF88,
+            )
+            await channel.send(embed=final_embed)
+
+        except Exception as e:
+            await channel.send(
+                embed=discord.Embed(
+                    description=f"최종 요약 실패: {str(e)[:200]}", color=0xFF0000
+                )
+            )
+
+    brainstorm_active.pop(channel_id, None)
+
+    if brainstorm_active.get(channel_id) is None:
+        done_embed = discord.Embed(
+            description="🏁 **브레인스토밍 종료!** 위 요약을 확인하세요.",
+            color=0x333333,
+        )
+        await channel.send(embed=done_embed)
+
+
+@tree.command(name="stop", description="브레인스토밍 중지")
+async def stop_command(interaction):
+    channel_id = interaction.channel.id
+    if brainstorm_active.get(channel_id):
+        brainstorm_active[channel_id] = False
+        await interaction.response.send_message("⏹ 브레인스토밍을 중지합니다...")
+    else:
+        await interaction.response.send_message(
+            "진행 중인 브레인스토밍이 없습니다.", ephemeral=True
+        )
+
+
 bot.run(os.environ.get("DISCORD_TOKEN"))
