@@ -1,0 +1,15 @@
+{
+  "name": "brand-team-bot",
+  "version": "1.0.0",
+  "description": "AI Branding Team Discord Bot — 4 specialized agents",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "register": "node register-commands.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7"
+  }
+}
