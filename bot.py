@@ -83,6 +83,8 @@ CHANNEL_MAP = {
     "design": "director",
     "reviewer": "reviewer",
     "review": "reviewer",
+    "team-chat": "all",
+    "team": "all",
 }
 
 # ─── Conversation History ────────────────────────────────────────────
@@ -170,6 +172,20 @@ async def on_message(message):
     if agent_id is None:
         return
 
+    # Team chat: all agents respond
+    if agent_id == "all":
+        for aid, agent in AGENTS.items():
+            async with message.channel.typing():
+                reply = await get_response(message.author.id, aid, message.content)
+            for i in range(0, len(reply), 1900):
+                chunk = reply[i : i + 1900]
+                embed = discord.Embed(description=chunk, color=agent["color"])
+                if i == 0:
+                    embed.set_author(name=agent["name"])
+                await message.channel.send(embed=embed)
+        return
+
+    # Single agent response
     agent = AGENTS[agent_id]
     async with message.channel.typing():
         reply = await get_response(message.author.id, agent_id, message.content)
@@ -244,6 +260,7 @@ async def setup_command(interaction):
         ("copywriter", "Copywriting channel"),
         ("director", "Design direction channel"),
         ("reviewer", "Review & critique channel"),
+        ("team-chat", "All team members respond together"),
     ]:
         if not discord.utils.get(guild.text_channels, name=name):
             ch = await guild.create_text_channel(name, category=category, topic=topic)
